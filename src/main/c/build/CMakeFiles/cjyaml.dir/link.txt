@@ -1,1 +1,0 @@
-/usr/bin/cc -fPIC -O3 -DNDEBUG -shared -Wl,-soname,libcjyaml.so -o /home/omega/Projekty/C/CJYaml/src/main/c/out/libcjyaml.so CMakeFiles/cjyaml.dir/src/CJYaml.c.o 

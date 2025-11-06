@@ -1,4 +1,0 @@
-/home/omega/Projekty/C/CJYaml/src/main/c/build/CMakeFiles/cjyaml.dir
-/home/omega/Projekty/C/CJYaml/src/main/c/build/CMakeFiles/clean-out.dir
-/home/omega/Projekty/C/CJYaml/src/main/c/build/CMakeFiles/edit_cache.dir
-/home/omega/Projekty/C/CJYaml/src/main/c/build/CMakeFiles/rebuild_cache.dir
