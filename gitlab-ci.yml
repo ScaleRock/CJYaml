@@ -1,0 +1,33 @@
+stages:
+  - build
+
+variables:
+  BUILD_DIR: build
+  OUT_DIR: out/linux
+  CMAKE_BUILD_TYPE: Release
+  CMAKE_GENERATOR: "Unix Makefiles"
+
+# Cache CMake files to speed up rebuilds
+cache:
+  key: "${CI_COMMIT_REF_SLUG}"
+  paths:
+    - build/
+
+before_script:
+  - yum install -y gcc gcc-c++ make cmake git java-21-openjdk-devel
+
+build_linux_native:
+  stage: build
+  tags:
+    - linux  # jeśli używasz runnera z tagiem 'linux'
+  script:
+    - echo "Starting native Linux build..."
+    - mkdir -p ${BUILD_DIR}
+    - cmake -S . -B ${BUILD_DIR} -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+    - cmake --build ${BUILD_DIR} --config ${CMAKE_BUILD_TYPE} --parallel
+    - ls -lh ${OUT_DIR}   # pokaż co się wygenerowało
+  artifacts:
+    paths:
+      - ${OUT_DIR}/libcjyaml.a
+      - ${OUT_DIR}/libcjyaml.so
+    expire_in: 1 week

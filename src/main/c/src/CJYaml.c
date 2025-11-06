@@ -1,134 +1,296 @@
 #include "CJYaml.h"
 
 #include <stdint.h>
-#include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
-#include <string.h>
-#include <errno.h>
 
 
-/* Try to get file size using fseek/ftell.
- * Returns file size on success, or -1 if not possible (e.g. pipe, stdin). */
-static long get_file_size(FILE *fp) {
-    if (fseek(fp, 0, SEEK_END) != 0)
-        return -1;
+#if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
+    #include <sys/mman.h>
+    #include <sys/stat.h>
+    #include <fcntl.h>
+    #include <unistd.h>
+    #include <errno.h>
+#else
+    #include <windows.h>
+    #define _CRT_SECURE_NO_WARNINGS
+#endif
 
-    long size = ftell(fp);
-    if (size < 0)
-        return -1;
+/* xxhash prototype - ensure xxhash library/header is available in build */
+extern uint64_t XXH64(const void* input, size_t length, uint64_t seed);
 
-    if (fseek(fp, 0, SEEK_SET) != 0)
-        return -1;
+/* -------------------------
+   Hash helpers
+   ------------------------- */
 
-    return size;
+MYLIB_API uint64_t compute_hash_from_bytes(const void *data, const uint64_t len) {
+    if (data == NULL || len == 0) return 0;
+    return XXH64(data, len, 0);
+}
+
+MYLIB_API uint64_t compute_hash_from_node_safe(const void *nodes_base,
+                                               const uint64_t node_count,
+                                               const uint32_t node_index,
+                                               const void *string_table_base,
+                                               const uint64_t string_table_size) {
+    if (nodes_base == NULL || string_table_base == NULL) return 0;
+    if ((uint64_t)node_index >= node_count) return 0;
+
+    const NodeEntry *nodes = nodes_base;
+    const NodeEntry *n = &nodes[node_index];
+
+    if (n->node_type != 0) return 0; // not SCALAR
+
+    const uint64_t offset = n->a;
+    const uint64_t len = n->b;
+
+    if (offset > string_table_size) return 0;
+    if (len > string_table_size) return 0;
+    if (offset + len > string_table_size) return 0;
+
+    const void *ptr = ((const char*)string_table_base + (size_t)offset);
+    return XXH64(ptr, len, 0);
 }
 
 
-/* Read entire file when the size is already known. */
-static char *read_exact_size(FILE *fp, long size) {
-    char *buf = malloc((size_t)size + 1);
-    if (!buf) return NULL;
+MYLIB_API void *mapFile(const char *path, size_t *out_size) {
+    if (out_size) *out_size = 0;
+    if (path == NULL) return NULL;
 
-    size_t read_bytes = fread(buf, 1, (size_t)size, fp);
-    if (read_bytes != (size_t)size && ferror(fp)) {
+#if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
+    const int fd = open(path, O_RDONLY);
+    if (fd < 0) return NULL;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return NULL;
+    }
+
+    if (st.st_size == 0) {
+        close(fd);
+        if (out_size) *out_size = 0;
+        return NULL;
+    }
+
+    void *map = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+
+    if (map == MAP_FAILED) {
+        if (out_size) *out_size = 0;
+        return NULL;
+    }
+
+    if (out_size) *out_size = (size_t)st.st_size;
+    return map;
+#else
+    HANDLE hFile = CreateFileA(
+        path,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+    if (hFile == INVALID_HANDLE_VALUE) {
+        if (out_size) *out_size = 0;
+        return NULL;
+    }
+
+    LARGE_INTEGER liSize;
+    if (!GetFileSizeEx(hFile, &liSize)) {
+        CloseHandle(hFile);
+        if (out_size) *out_size = 0;
+        return NULL;
+    }
+
+    if (liSize.QuadPart == 0) {
+        CloseHandle(hFile);
+        if (out_size) *out_size = 0;
+        return NULL;
+    }
+
+    if ((uint64_t)liSize.QuadPart > (uint64_t)SIZE_MAX) {
+        // rozmiar pliku nie mieści się w size_t
+        CloseHandle(hFile);
+        if (out_size) *out_size = 0;
+        return NULL;
+    }
+
+    HANDLE hMap = CreateFileMappingA(
+        hFile,
+        NULL,
+        PAGE_READONLY,
+        0,
+        0,
+        NULL
+    );
+    if (hMap == NULL) {
+        CloseHandle(hFile);
+        if (out_size) *out_size = 0;
+        return NULL;
+    }
+
+    void *view = MapViewOfFile(
+        hMap,
+        FILE_MAP_READ,
+        0, 0,
+        0
+    );
+    if (view == NULL) {
+        CloseHandle(hMap);
+        CloseHandle(hFile);
+        if (out_size) *out_size = 0;
+        return NULL;
+    }
+
+
+    CloseHandle(hMap);
+    CloseHandle(hFile);
+
+    if (out_size) *out_size = (size_t)liSize.QuadPart;
+    return view;
+#endif
+}
+
+MYLIB_API int unmapFile(void *addr, size_t size) {
+    if (addr == NULL) return -1;
+#if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
+    if (size == 0) return -1;
+    if (munmap(addr, size) == 0) return 0;
+    return -1;
+#else
+    (void)size;
+    if (UnmapViewOfFile(addr)) return 0;
+    return -1;
+#endif
+}
+
+/* -------------------------
+   Native memory helpers
+   ------------------------- */
+
+MYLIB_API void freeBlob(void *ptr) {
+    if (!ptr) return;
+    free(ptr);
+}
+
+/* -------------------------
+   JNI helpers
+   ------------------------- */
+
+/* Helper: create direct ByteBuffer or free pointer if creation fails */
+static jobject create_direct_bytebuffer_or_free(JNIEnv *env, void *buf, const jlong len) {
+    jobject bb = (*env)->NewDirectByteBuffer(env, buf, len);
+    if (bb == NULL) {
+        free(buf);
+        return NULL;
+    }
+    return bb;
+}
+
+/* -------------------------
+   JNI wrappers (stubs)
+   ------------------------- */
+
+/* parseToDirectByteBuffer
+   For now: wraps input byte[] into native malloc buffer and returns DirectByteBuffer.
+   TODO: replace with real parsing logic returning parsed blob.
+*/
+MYLIB_API jobject JNICALL NativeLib_parseToDirectByteBuffer(JNIEnv *env, const jclass cls, const jbyteArray data) {
+    (void)cls;
+
+    if (data == NULL) return NULL;
+
+    const jsize len = (*env)->GetArrayLength(env, data);
+    if (len <= 0) return NULL;
+
+    void *buf = malloc((size_t)len);
+    if (buf == NULL) return NULL;
+
+    (*env)->GetByteArrayRegion(env, data, 0, len, (jbyte*)buf);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
         free(buf);
         return NULL;
     }
 
-    buf[read_bytes] = '\0';
-    return buf;
+    /* TODO: call your parser here to transform 'buf' into parsed binary blob.
+       For now we simply return the raw bytes as direct buffer. */
+    return create_direct_bytebuffer_or_free(env, buf, len);
 }
 
+/* parseToByteArray
+   For now: returns a copy of input array.
+   TODO: replace with actual parse output bytes.
+*/
+MYLIB_API jbyteArray JNICALL NativeLib_parseToByteArray(JNIEnv *env, const jclass cls, const jbyteArray data) {
+    (void)cls;
 
-/* Fallback: read file in chunks when size is unknown. */
-static char *read_by_chunks(FILE *fp) {
-    size_t cap = READ_CHUNK;
-    size_t len = 0;
-    char *buf = malloc(cap);
-    if (!buf) return NULL;
+    if (data == NULL) return NULL;
 
-    while (1) {
-        /* Make sure there is room for the next chunk + null terminator */
-        if (len + READ_CHUNK + 1 > cap) {
-            size_t newcap = cap * 2;
-            if (newcap < len + READ_CHUNK + 1)
-                newcap = len + READ_CHUNK + 1;
+    jsize len = (*env)->GetArrayLength(env, data);
+    if (len < 0) return NULL;
 
-            char *tmp = realloc(buf, newcap);
-            if (!tmp) {
-                free(buf);
-                return NULL;
-            }
-            buf = tmp;
-            cap = newcap;
-        }
+    jbyteArray out = (*env)->NewByteArray(env, len);
+    if (out == NULL) return NULL;
 
-        size_t n = fread(buf + len, 1, READ_CHUNK, fp);
-        if (n > 0) len += n;
-
-        if (n < READ_CHUNK) {
-            if (feof(fp)) break;
-            if (ferror(fp)) {
-                free(buf);
-                return NULL;
-            }
-        }
-    }
-
-    /* Shrink buffer to exact size + null terminator */
-    char *final = realloc(buf, len + 1);
-    if (!final) {
-        buf[len] = '\0';
-        return buf;
-    }
-
-    final[len] = '\0';
-    return final;
-}
-
-
-/* Public function: read all file contents into a char*.
- * Returns null-terminated string, or NULL on error. */
-static char *read_file_all(FILE *fp) {
-    if (!fp) {
-        errno = EINVAL;
+    jbyte *tmp = malloc((size_t)len);
+    if (!tmp) {
+        (*env)->DeleteLocalRef(env, out);
         return NULL;
     }
 
-    long size = get_file_size(fp);
-    if (size >= 0) {
-        return read_exact_size(fp, size);
-    }
-
-    /* If file is not seekable, clear error and fallback */
-    clearerr(fp);
-    rewind(fp);
-
-    return read_by_chunks(fp);
-}
-
-
-
-
-
-
-
-MYLIB_API uint8_t **pareseFile(const char *path){
-    FILE *fp = NULL;
-    if((fp = fopen(path, "r")) == NULL) return NULL;
-
-    char *fileContent = read_file_all(fp);
-    if(fileContent == NULL){
-        free(fileContent);
+    (*env)->GetByteArrayRegion(env, data, 0, len, tmp);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        free(tmp);
+        (*env)->DeleteLocalRef(env, out);
         return NULL;
     }
-    
-    fclose(fp);
 
-
-    return NULL;
+    (*env)->SetByteArrayRegion(env, out, 0, len, tmp);
+    free(tmp);
+    return out;
 }
 
-MYLIB_API uint8_t **parseFromOpenFile(const char *fileContent) {
-    return NULL;
+/* freeBlob JNI wrapper: free native memory referenced by direct ByteBuffer */
+MYLIB_API void JNICALL NativeLib_freeBlob(JNIEnv *env, const jclass cls, jobject buffer) {
+    (void)cls;
+
+    if (buffer == NULL) return;
+
+    void *addr = (*env)->GetDirectBufferAddress(env, buffer);
+    if (addr != NULL) free(addr);
+}
+
+/* mapFileNative: returns pointer as jlong (or 0 on error).
+   Note: passing raw pointers to Java is unsafe but common in JNI.
+   Alternative: return NewDirectByteBuffer(env, mapped, size).
+*/
+MYLIB_API jlong JNICALL NativeLib_mapFileNative(JNIEnv *env, const jclass cls, const jstring jpath) {
+    (void)cls;
+    if (jpath == NULL) return 0;
+
+    const char *path = (*env)->GetStringUTFChars(env, jpath, NULL);
+    if (path == NULL) return 0;
+
+    size_t size = 0;
+    void *mapped = mapFile(path, &size);
+
+    (*env)->ReleaseStringUTFChars(env, jpath, path);
+
+    if (mapped == NULL) return 0;
+
+    return (intptr_t)mapped;
+}
+
+/* unmapFileNative: unmap previously mapped pointer */
+MYLIB_API jint JNICALL NativeLib_unmapFileNative(JNIEnv *env, jclass cls, jlong ptr, jlong size) {
+    (void)env;
+    (void)cls;
+    if (ptr == 0 || size == 0) return -1;
+    void *addr = (void*)ptr;
+    return (unmapFile(addr, (size_t)size) == 0) ? 0 : -1;
 }

@@ -124,15 +124,13 @@ typedef struct {
 * ALIAS: `a = target_node_index` (the node index that the alias points to), `b = 0`.
 * DOCUMENT: `a = root_node_index` (or root node reference), `b = 0`.
 
-**style_flags bits** (suggested):
+**style_flags bits**:
 
 * Bit 0..1: SCALAR subtype (00=string, 01=int, 10=float, 11=bool)
 * Bit 2: folded literal indicator (text format)
 * Bits 3..7: reserved for future use
 
 **tag_index:** if non-zero this is an index into the string table containing the explicit YAML tag (e.g. "!!str", "!mytag"). `0` means "no tag".
-
-**anchor_id:** optionally store a numeric id assigned to anchors encountered during parsing. Anchor mapping (name->node_index) is kept in the build-phase; anchor_id can be useful for debug output or for diagnostic tools.
 
 **Responsibility:** `NodeEntry` provides all necessary info to locate data for any node without requiring other pointers. While building the blob, all internal pointers are converted to offsets/indices.
 
