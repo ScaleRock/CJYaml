@@ -27,6 +27,8 @@ Output: `out/linux/`
 * Static library: `libcjyaml.a` 
 * Shared library (if enabled): `libcjyaml.so`
 
+Copy the library to src/main/java/resources
+
 ### Windows (native)
 
 ```powershell
@@ -46,6 +48,7 @@ Output: `out/windows/`
 
 > Optional: Set `JAVA_WINDOWS_HOME` for JNI support on Windows.
 
+Copy the library to src/main/java/resources
 ### Clean
 
 ```bash

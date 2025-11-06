@@ -43,31 +43,6 @@
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.1.0</version>
-        <executions>
-          <execution>
-            <id>build-native-and-copy</id>
-            <phase>generate-resources</phase>
-            <goals>
-              <goal>exec</goal>
-            </goals>
-            <configuration>
-              <executable>sh</executable>
-              <arguments>
-                <argument>-c</argument>
-                <argument><![CDATA[
-mkdir -p build
-cd build
-cmake ..
-cmake --build . --config Release
-
-]]></argument>
-              </arguments>
-
-              <failOnError>false</failOnError>
-            </configuration>
-          </execution>
-        </executions>
-
       </plugin>
 
       <plugin>

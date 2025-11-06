@@ -10,7 +10,6 @@
     #include <sys/stat.h>
     #include <fcntl.h>
     #include <unistd.h>
-    #include <errno.h>
 #else
     #include <windows.h>
     #define _CRT_SECURE_NO_WARNINGS
@@ -84,15 +83,7 @@ MYLIB_API void *mapFile(const char *path, size_t *out_size) {
     if (out_size) *out_size = (size_t)st.st_size;
     return map;
 #else
-    HANDLE hFile = CreateFileA(
-        path,
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        NULL,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL
-    );
+    HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         if (out_size) *out_size = 0;
         return NULL;
@@ -118,26 +109,14 @@ MYLIB_API void *mapFile(const char *path, size_t *out_size) {
         return NULL;
     }
 
-    HANDLE hMap = CreateFileMappingA(
-        hFile,
-        NULL,
-        PAGE_READONLY,
-        0,
-        0,
-        NULL
-    );
+    HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL );
     if (hMap == NULL) {
         CloseHandle(hFile);
         if (out_size) *out_size = 0;
         return NULL;
     }
 
-    void *view = MapViewOfFile(
-        hMap,
-        FILE_MAP_READ,
-        0, 0,
-        0
-    );
+    void *view = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0 );
     if (view == NULL) {
         CloseHandle(hMap);
         CloseHandle(hFile);
@@ -230,10 +209,10 @@ MYLIB_API jbyteArray JNICALL NativeLib_parseToByteArray(JNIEnv *env, const jclas
 
     if (data == NULL) return NULL;
 
-    jsize len = (*env)->GetArrayLength(env, data);
+    const jsize len = (*env)->GetArrayLength(env, data);
     if (len < 0) return NULL;
 
-    jbyteArray out = (*env)->NewByteArray(env, len);
+    const jbyteArray out = (*env)->NewByteArray(env, len);
     if (out == NULL) return NULL;
 
     jbyte *tmp = malloc((size_t)len);
@@ -287,7 +266,7 @@ MYLIB_API jlong JNICALL NativeLib_mapFileNative(JNIEnv *env, const jclass cls, c
 }
 
 /* unmapFileNative: unmap previously mapped pointer */
-MYLIB_API jint JNICALL NativeLib_unmapFileNative(JNIEnv *env, jclass cls, jlong ptr, jlong size) {
+MYLIB_API jint JNICALL NativeLib_unmapFileNative(const JNIEnv *env, const jclass cls, const jlong ptr, const jlong size) {
     (void)env;
     (void)cls;
     if (ptr == 0 || size == 0) return -1;
