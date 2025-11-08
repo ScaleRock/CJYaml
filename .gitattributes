@@ -1,4 +1,5 @@
 *.c linguist-language=C
-.h  linguist-language=C
+*.h linguist-language=C
 
-src/main/c/lib/xxHash/* linguist-vendored
+
+src/main/c/lib/xxHash/* linguist-vendored=true
