@@ -1,2 +1,4 @@
 *.c linguist-language=C
 .h  linguist-language=C
+
+src/main/c/lib/* linguist-vendored
