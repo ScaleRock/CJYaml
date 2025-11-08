@@ -69,52 +69,108 @@ static void *safe_realloc(void *ptr, const size_t n) {
 }
 
 /* Poprawione wektory z sprawdzaniem alokacji */
-static void nodes_init(NodeVec *v) { v->data = NULL; v->count = 0; v->cap = 0; }
-static void nodes_push(NodeVec *v, NodeEntry n) {
-    if (v->count == v->cap) {
-        const size_t nc = v->cap ? v->cap * 2 : 16;
-        v->data = (NodeEntry*) safe_realloc(v->data, nc * sizeof(NodeEntry));
-        v->cap = nc;
-    }
-    v->data[v->count++] = n;
+static void nodes_init(NodeVec *v) {
+    v->data = NULL;
+    v->count = 0;
+    v->cap = 0;
 }
 
-static void pairs_init(PairVec *v) { v->data = NULL; v->count = 0; v->cap = 0; }
-static void pairs_push(PairVec *v, PairEntry p) {
-    if (v->count == v->cap) {
-        const size_t nc = v->cap ? v->cap * 2 : 16;
-        v->data = (PairEntry*) safe_realloc(v->data, nc * sizeof(PairEntry));
-        v->cap = nc;
+// Helper to grow a dynamic array if needed
+// - data_ptr: pointer to the array pointer (e.g., &vec->data)
+// - count: current number of elements
+// - cap_ptr: pointer to the current capacity
+// - elem_size: size of one element in bytes
+static void grow_array_if_needed(void **data_ptr, const size_t count, size_t *cap_ptr, const size_t elem_size) {
+    if (count == *cap_ptr) {
+        size_t new_capacity;
+        if (*cap_ptr < 1024) {
+            new_capacity = *cap_ptr ? (*cap_ptr * 2) : 16;  // double for small arrays
+        } else if (*cap_ptr < 10000) {
+            new_capacity = *cap_ptr + (*cap_ptr / 2);       // ~1.5x growth
+        } else {
+            new_capacity = *cap_ptr + (*cap_ptr / 5);       // ~1.2x growth
+        }
+
+        *data_ptr = safe_realloc(*data_ptr, new_capacity * elem_size);
+        *cap_ptr = new_capacity;
     }
-    v->data[v->count++] = p;
 }
 
-static void index_init(IndexVec *v) { v->data = NULL; v->count = 0; v->cap = 0; }
-static void index_push(IndexVec *v, uint32_t x) {
-    if (v->count == v->cap) {
-        const size_t nc = v->cap ? v->cap * 2 : 16;
-        v->data = (uint32_t*) safe_realloc(v->data, nc * sizeof(uint32_t));
-        v->cap = nc;
-    }
-    v->data[v->count++] = x;
+
+static void nodes_push(NodeVec *vec, const NodeEntry node) {
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(NodeEntry));
+    vec->data[vec->count++] = node;
 }
+
+static void pairs_push(PairVec *vec, PairEntry pair) {
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(PairEntry));
+    vec->data[vec->count++] = pair;
+}
+
+static void index_push(IndexVec *vec, uint32_t value) {
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(uint32_t));
+    vec->data[vec->count++] = value;
+}
+
+
+
+static void pairs_init(PairVec *v) {
+    v->data = NULL;
+    v->count = 0;
+    v->cap = 0;
+}
+
+
+static void index_init(IndexVec *v) {
+    v->data = NULL;
+    v->count = 0;
+    v->cap = 0;
+}
+
+
+
 
 static void strings_init(StringVec *v) { v->data = NULL; v->lens = NULL; v->count = 0; v->cap = 0; }
-static void strings_push(StringVec *v, const char *s, size_t len) {
-    if (v->count == v->cap) {
-        const size_t nc = v->cap ? v->cap * 2 : 16;
-        v->data = safe_realloc(v->data, nc * sizeof(char*));
-        v->lens = safe_realloc(v->lens, nc * sizeof(size_t));
-        v->cap = nc;
+
+
+
+static void strings_push(StringVec *vec, const char *str, const size_t len) {
+    // Appends a new string to a StringVec, expanding the capacity if needed.
+    // The capacity grows differently depending on the current size:
+    //   - double (x2) until 1024 elements
+    //   - 1.5x (approximate using integer math) until 10,000 elements
+    //   - 1.2x (approximate using integer math) for larger sizes
+    // - vec: pointer to the StringVec to append to
+    // - str: pointer to the string to add
+    // - len: length of the string
+
+    if (vec->count == vec->cap) {
+        size_t new_capacity;
+
+        if (vec->cap < 1024) {
+            new_capacity = vec->cap ? vec->cap * 2 : 16;       // fast growth for small vectors
+        } else if (vec->cap < 10000) {
+            new_capacity = vec->cap + vec->cap / 2;           // ~1.5x growth using integer math
+        } else {
+            new_capacity = vec->cap + vec->cap / 5;           // ~1.2x growth using integer math
+        }
+
+        vec->data = safe_realloc(vec->data, new_capacity * sizeof(char*));
+        vec->lens = safe_realloc(vec->lens, new_capacity * sizeof(size_t));
+        vec->cap = new_capacity;
     }
 
-    char *dup = safe_malloc(len ? len + 1 : 1);
-    if (len) memcpy(dup, s, len);
-    dup[len] = '\0';  // <- dodajemy terminator
-    v->data[v->count] = dup;
-    v->lens[v->count] = len;
-    v->count++;
+    char *copy = safe_malloc(len ? len + 1 : 1);
+    if (len) memcpy(copy, str, len);
+    copy[len] = '\0';
+
+    vec->data[vec->count] = copy;
+    vec->lens[vec->count] = len;
+    vec->count++;
 }
+
+
+
 
 static void hash_init(HashVec *v) { v->data = NULL; v->count = 0; v->cap = 0; }
 static void hash_push(HashVec *v, HashEntry h) {
@@ -154,20 +210,20 @@ static void builder_free(BlobBuilder *bb) {
     if (bb->strings.lens) free(bb->strings.lens);
 }
 
-// addString: dedupe; returns index in strings vector
-static uint64_t builder_add_string(BlobBuilder *bb, const char *s, size_t len) {
-    ssize_t idx = strings_find(&bb->strings, s, len);
-    if (idx >= 0) return (uint64_t)idx;
+static uint64_t builder_add_string(BlobBuilder *bb, const char *s, const size_t len) {
+    const size_t idx = strings_find(&bb->strings, s, len);
+    if (idx != SIZE_MAX) return (uint64_t)idx;  // found, return existing index
     strings_push(&bb->strings, s, len);
     return (uint64_t)(bb->strings.count - 1);
 }
 
+
 // add scalar node; but NodeEntry->a/b must be offset/len in string table.
 // We'll temporarily store a = index of string in bb->strings; b = length. Later we convert a to absolute offset.
 static uint32_t builder_add_scalar(BlobBuilder *bb, const char *s, const size_t len, const uint8_t style_flags, const uint16_t tag_index) {
-    uint64_t str_index = builder_add_string(bb, s, len);
+    const uint64_t str_index = builder_add_string(bb, s, len);
     NodeEntry n;
-    n.node_type = 0;
+    n.node_type = SCALAR;
     n.style_flags = style_flags;
     n.tag_index = tag_index;
     n.a = str_index; // temporarily store string index
@@ -178,14 +234,16 @@ static uint32_t builder_add_scalar(BlobBuilder *bb, const char *s, const size_t 
 
 // append pair (key_node_index, value_node_index)
 static uint32_t builder_append_pair(BlobBuilder *bb, const uint32_t key_idx, const uint32_t val_idx) {
-    PairEntry p; p.key_node_index = key_idx; p.value_node_index = val_idx;
+    PairEntry p;
+    p.key_node_index = key_idx;
+    p.value_node_index = val_idx;
     pairs_push(&bb->pairs, p);
     return (uint32_t)(bb->pairs.count - 1);
 }
 
 // add sequence node: stores a=first_index_index (uint64) (index into index table), b=element_count
 static uint32_t builder_add_sequence(BlobBuilder *bb, const uint32_t *elements, const size_t elem_count) {
-    uint64_t first = bb->indices.count;
+    const uint64_t first = bb->indices.count;
     for (size_t i=0;i<elem_count;i++) index_push(&bb->indices, elements[i]);
     NodeEntry n;
     n.node_type = 1;
@@ -530,38 +588,56 @@ static unsigned char *builder_build_to_memory(BlobBuilder *bb, size_t *out_size,
 }
 
 
-static size_t trim_span(const unsigned char *src, size_t len, size_t *begin, size_t *end) {
+static size_t trim_span(const unsigned char *src, const size_t len, size_t *begin, size_t *end) {
+    /*
+    This loop trims whitespace from both ends of a string by moving two pointers: b from the start and e from the end.
+    It checks each side in every iteration and stops when both ends point to non-whitespace characters.
+    After the loop, b, e marks the trimmed substring, and the function returns its length.
+     */
     size_t b = 0;
-    while (b < len && isspace((int)src[b])) ++b;
     size_t e = len;
-    while (e > b && isspace((int)src[e-1])) --e;
+
+    while (b < e) {
+        int left_space = isspace(src[b]);
+        int right_space = isspace(src[e - 1]);
+
+        if (!left_space && !right_space) break;
+
+        if (left_space) ++b;
+        if (right_space) --e;
+    }
+
     *begin = b;
-    *end = e; // [b, e)
+    *end = e;
     return (e > b) ? (e - b) : 0;
 }
 
-static int starts_with_dash(const unsigned char *s, size_t b, size_t e) {
-    // after trimming left, check first char is '-'
-    const size_t i = b;
-    return (i < e && s[i] == '-');
-}
 
-static int is_comment_or_empty(const unsigned char *s, size_t b, size_t e) {
-    if (b >= e) return 1;
-    // skip leading spaces
+static bool is_comment_or_empty(const unsigned char *s, const size_t b, const size_t e) {
+    /*
+    This function checks whether a substring `[b, e)` of a string is non-empty and not a comment.
+    It skips leading whitespace and returns `false` if the substring is empty or starts with `#`.
+    Otherwise, it returns `true`, indicating that the line contains meaningful content.
+     */
+    if (b >= e) return false;
     size_t i = b;
     while (i < e && isspace((int)s[i])) ++i;
-    if (i >= e) return 1;
-    if (s[i] == '#') return 1;
-    return 0;
+    if (i >= e) return false;
+    if (s[i] == '#') return false;
+    return true;
 }
 
-// read mem region to new malloc'd zero-terminated C string (for convenience)
-static char *memdup_str(const unsigned char *data, size_t b, size_t e) {
-    size_t len = (e > b) ? (e - b) : 0;
+
+static char *memdup_str(const unsigned char *data, const size_t b, const size_t e) {
+    /*
+        This function creates a new heap-allocated C string by copying the memory region `[b, e)` from the input `data`.
+        It allocates `len + 1` bytes, copies the content, and appends a null terminator for convenience.
+        If memory allocation fails, it returns `NULL`; otherwise, it returns the new zero-terminated string.
+     */
+    const size_t len = (e > b) ? (e - b) : 0;
     char *p = malloc(len + 1);
     if (!p) return NULL;
-    if (len) memcpy(p, data + b, len);
+    memcpy(p, data + b, len);
     p[len] = '\0';
     return p;
 }
@@ -574,12 +650,11 @@ static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_
         return NULL;
     }
 
-    const unsigned char *data = (const unsigned char*)mappedFile;
+    const unsigned char *data = mappedFile;
     BlobBuilder bb;
     builder_init(&bb);
 
-    // We'll build a single top-level mapping collecting pairs or keys -> sequences
-    // We'll keep temporary state: last_key_node_index for when we discover a sequence after a key
+
     uint32_t last_key_node = (uint32_t)-1;
     int expecting_sequence_for_last_key = 0;
 
@@ -593,10 +668,10 @@ static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_
 
         // trim
         size_t b, e;
-        trim_span(data + line_start, line_end - line_start, &b, &e);
+        trim_span(data, line_end - line_start, &b, &e);
         b += line_start; e += line_start; // adjust to absolute offsets
 
-        if (!is_comment_or_empty(data, b, e)) {
+        if (is_comment_or_empty(data, b, e)) {
             // check for sequence item "- item"
             // find first non-space char
             size_t i = b;
@@ -608,11 +683,13 @@ static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_
                 while (item_b < e && isspace((int)data[item_b])) ++item_b;
                 size_t item_e = e;
                 size_t tb, te;
-                trim_span(data + item_b, item_e - item_b, &tb, &te);
-                tb += item_b; te += item_b;
+                trim_span(data, item_e - item_b, &tb, &te);
+                tb += item_b;
+                te += item_b;
+
                 char *item_str = memdup_str(data, tb, te);
                 if (!item_str) goto err;
-                // Create scalar node for item
+
                 uint32_t item_node = builder_add_scalar(&bb, item_str, strlen(item_str), 0, 0);
                 free(item_str);
 
@@ -762,7 +839,7 @@ MYLIB_API uint64_t compute_hash_from_bytes(const void *data, const uint64_t len)
     return XXH64(data, len, 0);
 }
 
-MYLIB_API uint64_t compute_hash_from_node_safe(const void *nodes_base,
+MYLIB_API uint64_t compute_hash_from_node(const void *nodes_base,
                                                const uint64_t node_count,
                                                const uint32_t node_index,
                                                const void *string_table_base,
@@ -896,7 +973,7 @@ MYLIB_API void freeBlob(void *ptr) {
 
 /* Helper: create direct ByteBuffer or free pointer if creation fails */
 static jobject create_direct_bytebuffer_or_free(JNIEnv *env, void *buf, const jlong len) {
-    jobject bb = (*env)->NewDirectByteBuffer(env, buf, len);
+    const jobject bb = (*env)->NewDirectByteBuffer(env, buf, len);
     if (bb == NULL) {
         free(buf);
         return NULL;
@@ -908,15 +985,9 @@ static jobject create_direct_bytebuffer_or_free(JNIEnv *env, void *buf, const jl
    JNI wrappers (stubs)
    ------------------------- */
 
-/*
- * parseToDirectByteBuffer
- *
- * For now: maps the given file, passes it to `parse()`,
- * and wraps the parsed result (native buffer) into a DirectByteBuffer.
- * TODO: replace with real YAML parser returning binary blob.
- */
+
 JNIEXPORT jobject JNICALL
-Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToDirectByteBuffer(JNIEnv *env, const jclass cls, jstring path) {
+Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToDirectByteBuffer(JNIEnv *env, const jclass cls, const jstring path) {
     (void)cls;
     if (path == NULL) return NULL;
 
@@ -964,12 +1035,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToDirectByteBuffer(JNIEn
     return create_direct_bytebuffer_or_free(env, buf, jlen);
 }
 
-/*
- * parseToByteArray
- *
- * For now: returns a Java byte[] containing the raw parsed output.
- * TODO: replace with real YAML parsing logic.
- */
+
 JNIEXPORT jbyteArray JNICALL
 Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToByteArray(JNIEnv *env, const jclass cls, jstring path) {
     (void)cls;
@@ -1007,10 +1073,10 @@ Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToByteArray(JNIEnv *env,
         (*env)->ReleaseStringUTFChars(env, path, cpath);
         return NULL;
     }
-    jsize len = (jsize)parsed_size;
+    const jsize len = (jsize)parsed_size;
 
     /* Create a Java byte array for the parsed data */
-    jbyteArray out = (*env)->NewByteArray(env, len);
+    const jbyteArray out = (*env)->NewByteArray(env, len);
     if (out == NULL) {
         free(buf);
         (*env)->ReleaseStringUTFChars(env, path, cpath);
@@ -1033,6 +1099,56 @@ Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToByteArray(JNIEnv *env,
 
     return out;
 }
+
+JNIEXPORT jbyteArray JNICALL
+Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToByteArrayFromOpenFile(JNIEnv *env, const jclass cls, const jstring fileContent) {
+    (void)cls;
+    if (fileContent == NULL) return NULL;
+
+    const char *cpath = (*env)->GetStringUTFChars(env, fileContent, NULL);
+    if (cpath == NULL) return NULL;
+
+
+    /* Parse the file */
+    size_t parsed_size = 0;
+    const size_t fileSize = (*env)->GetStringUTFLength(env, fileContent);
+    void *buf = parse(fileContent, fileSize, &parsed_size);
+    (*env)->ReleaseStringUTFChars(env, fileContent, cpath);
+    if (buf == NULL) {
+        return NULL;
+    }
+
+    /* Ensure size fits in jsize */
+    if (parsed_size > (size_t)INT_MAX) {
+        free(buf);
+        return NULL;
+    }
+    const jsize len = (jsize)parsed_size;
+
+    /* Create a Java byte array for the parsed data */
+    const jbyteArray out = (*env)->NewByteArray(env, len);
+    if (out == NULL) {
+        free(buf);
+
+        return NULL;
+    }
+
+    /* Copy from native buffer to Java byte[] */
+    (*env)->SetByteArrayRegion(env, out, 0, len, (const jbyte *)buf);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        free(buf);
+        (*env)->DeleteLocalRef(env, out);
+        (*env)->ReleaseStringUTFChars(env, fileContent, cpath);
+        return NULL;
+    }
+
+    /* Free native memory and release Java string */
+    free(buf);
+
+    return out;
+}
+
 
 /*
  * freeBlob
