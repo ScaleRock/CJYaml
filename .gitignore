@@ -2,3 +2,5 @@
 target
 out
 build
+.idea
+cmake-build-debug

@@ -24,14 +24,13 @@ cmake --build . --config Release
 
 Output: `out/linux/`
 
-* Static library: `libcjyaml.a` 
 * Shared library (if enabled): `libcjyaml.so`
 
 Copy the library to src/main/java/resources
 
 ### Windows (native)
 
-```powershell
+```cmd
 BUILD_DIR="build"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
@@ -43,7 +42,6 @@ cmake --build . --config Release
 
 Output: `out/windows/`
 
-* Static library: `cjyaml.lib`
 * Shared library: `cjyaml.dll`
 
 > Optional: Set `JAVA_WINDOWS_HOME` for JNI support on Windows.
