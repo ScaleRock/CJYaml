@@ -81,11 +81,13 @@ Idea:
         uint64_t string_table_size;
     } HeaderBlob;
 #pragma pack(pop)
-_Static_assert(sizeof(HeaderBlob) == 90, "HeaderBlob must be 96 bytes");
+_Static_assert(sizeof(HeaderBlob) == 90, "HeaderBlob must be 90 bytes");
 
+#define CJYAML_MAGIC 0x59414D4Cu  // 'Y','A','M','L'
+#define HEADER_BLOB_SIZE (sizeof(HeaderBlob))
 
 #define SCALAR 0
-#define SQUENCE 1
+#define SEQUENCE 1
 #define MAPPING 2
 #define ALIAS 3
 #define DOCUMENT 4

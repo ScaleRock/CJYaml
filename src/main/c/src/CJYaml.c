@@ -455,7 +455,7 @@ static int builder_build_and_write(BlobBuilder *bb, const char *filename, const 
 }
 // Build blob in-memory (returns malloc'd buffer) — replace the file-writing section with this.
 // Caller must free(*out_buf) when done.
-static unsigned char *builder_build_to_memory(BlobBuilder *bb, size_t *out_size, const uint32_t magic, const uint16_t version, const uint32_t flags, const int include_hash_index) {
+static unsigned char *builder_build_to_memory(const BlobBuilder *bb, size_t *out_size, const uint32_t magic, const uint16_t version, const uint32_t flags, const int include_hash_index) {
     if (!out_size) return NULL;
     *out_size = 0;
 
@@ -495,10 +495,11 @@ static unsigned char *builder_build_to_memory(BlobBuilder *bb, size_t *out_size,
     }
 
     // Build hash entries
-    HashVec hvec; hash_init(&hvec);
+    HashVec hvec;
+    hash_init(&hvec);
     if (include_hash_index) {
         for (uint32_t i = 0; i < bb->pairs.count; ++i) {
-            PairEntry *p = &bb->pairs.data[i];
+            const PairEntry *p = &bb->pairs.data[i];
             if (p->key_node_index >= bb->nodes.count) continue;
             const NodeEntry *kn = &bb->nodes.data[p->key_node_index];
             if (kn->node_type != 0) continue;
@@ -527,11 +528,21 @@ static unsigned char *builder_build_to_memory(BlobBuilder *bb, size_t *out_size,
     const uint64_t hash_index_offset = index_table_offset + index_table_size;
     const uint64_t string_table_offset = hash_index_offset + hash_index_size;
 
-    if (string_table_offset > SIZE_MAX - st_size) { free(string_table); free(string_offsets); if (hvec.data) free(hvec.data); return NULL; }
-    size_t total_size = (size_t)(string_table_offset + st_size);
+    if (string_table_offset > SIZE_MAX - st_size) {
+        free(string_table);
+        free(string_offsets);
+        if (hvec.data) free(hvec.data);
+        return NULL;
+    }
+    const size_t total_size = (string_table_offset + st_size);
 
-    unsigned char *buf = (unsigned char*)malloc(total_size);
-    if (!buf) { free(string_table); free(string_offsets); if (hvec.data) free(hvec.data); return NULL; }
+    unsigned char *buf = malloc(total_size);
+    if (!buf) {
+        free(string_table);
+        free(string_offsets);
+        if (hvec.data) free(hvec.data);
+        return NULL;
+    }
     memset(buf, 0, total_size);
 
     // write header (little-endian)
@@ -598,8 +609,8 @@ static size_t trim_span(const unsigned char *src, const size_t len, size_t *begi
     size_t e = len;
 
     while (b < e) {
-        int left_space = isspace(src[b]);
-        int right_space = isspace(src[e - 1]);
+        const int left_space = isspace(src[b]);
+        const int right_space = isspace(src[e - 1]);
 
         if (!left_space && !right_space) break;
 
@@ -813,7 +824,7 @@ static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_
     }
 
     size_t blob_size = 0;
-    unsigned char *blob_buf = builder_build_to_memory(&bb, &blob_size, 0x59414D4Cu, 1, 0, 1);
+    unsigned char *blob_buf = builder_build_to_memory(&bb, &blob_size, CJYAML_MAGIC, 1, 0, 1);
     if (!blob_buf) {
         builder_free(&bb);
         if (out_size) *out_size = 0;
@@ -987,7 +998,7 @@ static jobject create_direct_bytebuffer_or_free(JNIEnv *env, void *buf, const jl
 
 
 JNIEXPORT jobject JNICALL
-Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToDirectByteBuffer(JNIEnv *env, const jclass cls, const jstring path) {
+Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToDirectByteBuffer(JNIEnv *env, const jclass cls, const jstring path) {
     (void)cls;
     if (path == NULL) return NULL;
 
@@ -1037,7 +1048,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToDirectByteBuffer(JNIEn
 
 
 JNIEXPORT jbyteArray JNICALL
-Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToByteArray(JNIEnv *env, const jclass cls, jstring path) {
+Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteArray(JNIEnv *env, const jclass cls, jstring path) {
     (void)cls;
     if (path == NULL) return NULL;
 
@@ -1101,7 +1112,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToByteArray(JNIEnv *env,
 }
 
 JNIEXPORT jbyteArray JNICALL
-Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToByteArrayFromOpenFile(JNIEnv *env, const jclass cls, const jstring fileContent) {
+Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteArrayFromOpenFile(JNIEnv *env, const jclass cls, const jstring fileContent) {
     (void)cls;
     if (fileContent == NULL) return NULL;
 
@@ -1153,16 +1164,83 @@ Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1parseToByteArrayFromOpenFile(
 /*
  * freeBlob
  *
- * JNI wrapper to free native memory referenced by a DirectByteBuffer.
- * This must be called from Java when the buffer is no longer needed,
- * unless you use a Cleaner or finalizer on the Java side.
+ * JNI wrapper that releases native memory referenced by a DirectByteBuffer.
+ *
+ * This must be called explicitly from Java when the buffer is no longer needed,
+ * unless a Cleaner or finalizer is used on the Java side to automatically handle cleanup.
+ *
+ * The function validates the buffer by reading the first HEADER_BLOB_SIZE bytes
+ * and checking whether the magic number matches the expected CJYAML blob header.
+ * If the magic number does not match, the buffer is not freed, and a Java
+ * IllegalArgumentException is thrown instead.
+ *
+ * This prevents accidental free() calls on invalid or non-owned memory.
+ */
+
+/*
+ * Reads a 32-bit unsigned integer from a byte buffer in little-endian order.
+ * This helper is used to interpret the 'magic' field in the CJYAML blob header.
+ *
+ * Parameters:
+ *   p - pointer to the first byte of the 4-byte field
+ *
+ * Returns:
+ *   The decoded 32-bit unsigned integer in host byte order.
+ */
+static uint32_t read_u32_le_from_bytes(const void *p) {
+    const uint8_t *b = (const uint8_t *)p;
+    return (uint32_t)b[0]
+         | ((uint32_t)b[1] << 8)
+         | ((uint32_t)b[2] << 16)
+         | ((uint32_t)b[3] << 24);
+}
+
+/*
+ * JNI function: NativeLib_freeBlob
+ *
+ * Safely frees a native buffer previously allocated by the CJYAML builder and
+ * wrapped into a DirectByteBuffer on the Java side.
+ *
+ * The function performs the following steps:
+ *   1. Obtains the native memory address from the DirectByteBuffer.
+ *   2. Reads the first HEADER_BLOB_SIZE bytes of the buffer.
+ *   3. Extracts the 'magic' field from the header and validates it against CJYAML_MAGIC.
+ *   4. If validation succeeds, the memory is freed using free().
+ *   5. If validation fails, a Java IllegalArgumentException is thrown and the
+ *      buffer is left untouched.
+ *
+ * Notes:
+ *   - This function assumes that the buffer points to the beginning of the blob.
+ *     Passing a sliced or offset buffer will fail validation (by design).
+ *   - The function is no-op if buffer is NULL or if the native address is NULL.
  */
 JNIEXPORT void JNICALL
-Java_com_github_scalerock_cjyaml_CJYaml_NativeLib_1freeBlob(JNIEnv *env, const jclass cls, jobject buffer) {
+Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1freeBlob(JNIEnv *env, const jclass cls, jobject buffer) {
     (void)cls;
+
     if (buffer == NULL) return;
 
     void *addr = (*env)->GetDirectBufferAddress(env, buffer);
-    if (addr != NULL) free(addr);
+    if (addr == NULL) return;
+
+    /* Read the first HEADER_BLOB_SIZE bytes to validate the blob header */
+    uint8_t hdr_bytes[HEADER_BLOB_SIZE];
+    memcpy(hdr_bytes, addr, HEADER_BLOB_SIZE);
+
+    /* Extract and validate the magic number (little-endian) */
+    const uint32_t magic = read_u32_le_from_bytes(hdr_bytes);
+
+    if (magic != CJYAML_MAGIC) {
+        const jclass exClass = (*env)->FindClass(env, "java/lang/IllegalArgumentException");
+        if (exClass) {
+            (*env)->ThrowNew(env, exClass, "Buffer magic mismatch: not a CJYAML blob (or not base pointer).");
+        }
+        return;
+    }
+
+    /* Magic number matches – safe to free the memory */
+    free(addr);
 }
+
+
 
