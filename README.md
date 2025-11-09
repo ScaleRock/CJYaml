@@ -1,4 +1,7 @@
-# ⚙️ CJYaml — Ultra-fast YAML Parser for C & Java
+<h1 align="left">
+⚙️ CJYaml — Ultra-fast YAML Parser for C & Java
+<img src="Docs/Images/Logo.png" alt="Logo" width="100" align="right"/>
+</h1>
 
 CJYaml is a **high-performance YAML 1.2.2 parser** written entirely in **C** for maximum speed and efficiency.  
 The native library is seamlessly integrated with **Java** through a lightweight JNI bridge, allowing developers to work with YAML files faster than ever before.
