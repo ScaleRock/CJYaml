@@ -185,7 +185,7 @@ static void hash_push(HashVec *v, HashEntry h) {
 
 // Find string in StringVec (linear scan) -> return offset into string table (to be computed later).
 // We store dedup keys as the string bytes themselves; for offset we compute cumulative sizes later.
-static ssize_t strings_find(StringVec *v, const char *s, const size_t len) {
+static ssize_t strings_find(const StringVec *v, const char *s, const size_t len) {
     for (size_t i=0;i<v->count;i++){
         if (v->lens[i] == len && memcmp(v->data[i], s, len)==0) return (ssize_t)i;
     }
@@ -200,21 +200,37 @@ static void builder_init(BlobBuilder *bb) {
 }
 
 static void builder_free(BlobBuilder *bb) {
-    if (bb->nodes.data) free(bb->nodes.data);
-    if (bb->pairs.data) free(bb->pairs.data);
-    if (bb->indices.data) free(bb->indices.data);
-    if (bb->strings.data) {
-        for (size_t i=0;i<bb->strings.count;i++) free(bb->strings.data[i]);
-        free(bb->strings.data);
+    if (bb->nodes.data) {
+        free(bb->nodes.data);
+        bb->nodes.data = NULL;
     }
-    if (bb->strings.lens) free(bb->strings.lens);
+    if (bb->pairs.data) {
+        free(bb->pairs.data);
+        bb->pairs.data = NULL;
+    }
+    if (bb->indices.data) {
+        free(bb->indices.data);
+        bb->indices.data = NULL;
+    }
+    if (bb->strings.data) {
+        for (size_t i=0;i<bb->strings.count;i++) {
+            free(bb->strings.data[i]);
+            bb->strings.data[i] = NULL;
+        }
+        free(bb->strings.data);
+        bb->strings.data = NULL;
+    }
+    if (bb->strings.lens) {
+        free(bb->strings.lens);
+        bb->strings.lens = NULL;
+    }
 }
 
 static uint64_t builder_add_string(BlobBuilder *bb, const char *s, const size_t len) {
     const size_t idx = strings_find(&bb->strings, s, len);
-    if (idx != SIZE_MAX) return (uint64_t)idx;  // found, return existing index
+    if (idx != SIZE_MAX) return idx;  // found, return existing index
     strings_push(&bb->strings, s, len);
-    return (uint64_t)(bb->strings.count - 1);
+    return (bb->strings.count - 1);
 }
 
 
@@ -255,23 +271,6 @@ static uint32_t builder_add_sequence(BlobBuilder *bb, const uint32_t *elements, 
     return (uint32_t)(bb->nodes.count - 1);
 }
 
-// add mapping node: we will append given pair indices to pair table, and node.a = first_pair_index, b = pair_count
-static uint32_t builder_add_mapping(BlobBuilder *bb, size_t pair_count) {
-    const uint64_t first = bb->pairs.count;
-    // append actual pairs by copying from provided pair_indices which refer to previously created pairs in the same bb or are temporary
-    // In our usage we will create PairEntry locally and append directly using pairs_push. For convenience, here's an approach:
-    // assume pair_indices point to existing pairs (created by builder_append_pair), so we simply create NodeEntry referencing them.
-    // If we want to pass new pairs inline, prefer to call builder_append_pair for each.
-    NodeEntry n;
-    n.node_type = 2;
-    n.style_flags = 0;
-    n.tag_index = 0;
-    n.a = first;
-    n.b = pair_count;
-    nodes_push(&bb->nodes, n);
-    return (uint32_t)(bb->nodes.count - 1);
-}
-
 
 // comparator (file-scope) used by qsort
 static int cmp_hashentry(const void *pa, const void *pb) {
@@ -284,175 +283,6 @@ static int cmp_hashentry(const void *pa, const void *pb) {
     return 0;
 }
 
-// Build final blob in memory and write to filename
-static int builder_build_and_write(BlobBuilder *bb, const char *filename, const uint32_t magic, const uint16_t version, const uint32_t flags, const int include_hash_index) {
-    // First convert strings vector into a single concatenated byte array and compute offsets for each string
-    size_t string_table_size = 0;
-    for (size_t i = 0; i < bb->strings.count; ++i) string_table_size += bb->strings.lens[i];
-
-    uint8_t *string_table = NULL;
-    uint64_t *string_offsets = NULL;
-    if (string_table_size) {
-        string_table = (uint8_t*)malloc(string_table_size);
-        if (!string_table) return 0;
-        string_offsets = (uint64_t*)malloc(bb->strings.count * sizeof(uint64_t));
-        if (!string_offsets) { free(string_table); return 0; }
-
-        size_t cursor = 0;
-        for (size_t i = 0; i < bb->strings.count; ++i) {
-            string_offsets[i] = cursor;
-            memcpy(string_table + cursor, bb->strings.data[i], bb->strings.lens[i]);
-            cursor += bb->strings.lens[i];
-        }
-        assert(cursor == string_table_size);
-    }
-
-    // Convert nodes: for scalar nodes, replace a (was string index) with absolute offset into string table
-    for (size_t i = 0; i < bb->nodes.count; ++i) {
-        NodeEntry *n = &bb->nodes.data[i];
-        if (n->node_type == 0) { // SCALAR
-            const uint64_t str_index = n->a;
-            if (str_index >= bb->strings.count) {
-                // invalid, but set to empty string reference
-                n->a = 0;
-                n->b = 0;
-            } else {
-                if (!string_offsets) return 0;
-                n->a = string_offsets[str_index];
-                // n->b already length
-            }
-        }
-        // sequences and mappings keep their indexes as counts/indices already relative to node/pair/index arrays
-    }
-
-    // Build hash index entries from pairs (only scalar keys)
-    HashVec hvec; hash_init(&hvec);
-    if (include_hash_index) {
-        for (uint32_t i = 0; i < bb->pairs.count; ++i) {
-            PairEntry *p = &bb->pairs.data[i];
-            if (p->key_node_index >= bb->nodes.count) continue;
-            const NodeEntry *kn = &bb->nodes.data[p->key_node_index];
-            if (kn->node_type != 0) continue; // only scalar keys
-            const uint64_t off = kn->a;
-            const uint64_t len = kn->b;
-            if (off + len > string_table_size) continue;
-            if (!string_table) return 0;
-            const uint64_t h = fnv1a64(string_table + off, len);
-            HashEntry he; he.key_hash = h; he.pair_index = i; he.reserved = 0;
-            hash_push(&hvec, he);
-        }
-        // sort by key_hash then pair_index -- use file-scope comparator
-        if (hvec.count > 0) {
-            qsort(hvec.data, hvec.count, sizeof(HashEntry), cmp_hashentry);
-        }
-    }
-
-    // compute sizes and offsets
-    const size_t header_size = sizeof(HeaderBlob); // 90
-    const size_t node_table_size = bb->nodes.count * sizeof(NodeEntry);
-    const size_t pair_table_size = bb->pairs.count * sizeof(PairEntry);
-    const size_t index_table_size = bb->indices.count * sizeof(uint32_t);
-    const size_t hash_index_size = (include_hash_index ? (hvec.count * sizeof(HashEntry)) : 0);
-    const size_t st_size = string_table_size;
-
-    const uint64_t node_table_offset = header_size;
-    const uint64_t pair_table_offset = node_table_offset + node_table_size;
-    const uint64_t index_table_offset = pair_table_offset + pair_table_size;
-    const uint64_t hash_index_offset = index_table_offset + index_table_size;
-    const uint64_t string_table_offset = hash_index_offset + hash_index_size;
-
-    size_t total_size = 0;
-    if (string_table_offset > SIZE_MAX - st_size) {
-        // overflow
-        if (string_table) free(string_table);
-        if (string_offsets) free(string_offsets);
-        if (hvec.data) free(hvec.data);
-        return 0;
-    }
-    total_size = string_table_offset + st_size;
-
-    uint8_t *blob = (uint8_t*)malloc(total_size);
-    if (!blob) {
-        fprintf(stderr, "No memory\n");
-        if (string_table) free(string_table);
-        if (string_offsets) free(string_offsets);
-        if (hvec.data) free(hvec.data);
-        return 0;
-    }
-    memset(blob, 0, total_size);
-
-    // fill header manually (little-endian)
-    write_u32_le(blob, 0, magic);
-    write_u16_le(blob, 4, version);
-    write_u32_le(blob, 6, flags);
-    size_t off = 10;
-    write_u64_le(blob, off + 0, node_table_offset); off += 8;
-    write_u64_le(blob, off + 0, bb->nodes.count);       off += 8;
-    write_u64_le(blob, off + 0, pair_table_offset);     off += 8;
-    write_u64_le(blob, off + 0, bb->pairs.count);       off += 8;
-    write_u64_le(blob, off + 0, index_table_offset);    off += 8;
-    write_u64_le(blob, off + 0, bb->indices.count);     off += 8;
-    write_u64_le(blob, off + 0, include_hash_index ? hash_index_offset : 0); off += 8;
-    write_u64_le(blob, off + 0, include_hash_index ? hvec.count : 0);         off += 8;
-    write_u64_le(blob, off + 0, string_table_offset);    off += 8;
-    write_u64_le(blob, off + 0, st_size);                off += 8;
-    assert(off == sizeof(HeaderBlob));
-
-    // copy node table
-    size_t dst = (size_t)node_table_offset;
-    for (size_t i = 0; i < bb->nodes.count; ++i) {
-        memcpy(blob + dst, &bb->nodes.data[i], sizeof(NodeEntry));
-        dst += sizeof(NodeEntry);
-    }
-    // copy pair table
-    dst = (size_t)pair_table_offset;
-    for (size_t i = 0; i < bb->pairs.count; ++i) {
-        memcpy(blob + dst, &bb->pairs.data[i], sizeof(PairEntry));
-        dst += sizeof(PairEntry);
-    }
-    // copy index table (uint32 LE)
-    dst = (size_t)index_table_offset;
-    for (size_t i = 0; i < bb->indices.count; ++i) {
-        write_u32_le(blob, dst, bb->indices.data[i]);
-        dst += sizeof(uint32_t);
-    }
-    // copy hash index
-    dst = (size_t)hash_index_offset;
-    for (size_t i = 0; i < hvec.count; ++i) {
-        memcpy(blob + dst, &hvec.data[i], sizeof(HashEntry));
-        dst += sizeof(HashEntry);
-    }
-    // copy string table
-    if (st_size) memcpy(blob + string_table_offset, string_table, st_size);
-
-    // write to file
-    FILE *f = fopen(filename, "wb");
-    if (!f) {
-        free(blob);
-        if (string_table) free(string_table);
-        if (string_offsets) free(string_offsets);
-        if (hvec.data) free(hvec.data);
-        return 0;
-    }
-    const size_t written = fwrite(blob, 1, total_size, f);
-    if (written != total_size) {
-        fclose(f);
-        free(blob);
-        if (string_table) free(string_table);
-        if (string_offsets) free(string_offsets);
-        if (hvec.data) free(hvec.data);
-        return 0;
-    }
-    fclose(f);
-
-
-    // cleanup
-    free(blob);
-    if (string_table) free(string_table);
-    if (string_offsets) free(string_offsets);
-    if (hvec.data) free(hvec.data);
-    return 1;
-}
 // Build blob in-memory (returns malloc'd buffer) — replace the file-writing section with this.
 // Caller must free(*out_buf) when done.
 static unsigned char *builder_build_to_memory(const BlobBuilder *bb, size_t *out_size, const uint32_t magic, const uint16_t version, const uint32_t flags, const int include_hash_index) {
@@ -484,7 +314,7 @@ static unsigned char *builder_build_to_memory(const BlobBuilder *bb, size_t *out
     for (size_t i = 0; i < bb->nodes.count; ++i) {
         NodeEntry *n = &bb->nodes.data[i];
         if (n->node_type == 0) {
-            uint64_t str_index = n->a;
+            const uint64_t str_index = n->a;
             if (str_index >= bb->strings.count) {
                 n->a = 0; n->b = 0;
             } else {
@@ -627,15 +457,15 @@ static size_t trim_span(const unsigned char *src, const size_t len, size_t *begi
 static bool is_comment_or_empty(const unsigned char *s, const size_t b, const size_t e) {
     /*
     This function checks whether a substring `[b, e)` of a string is non-empty and not a comment.
-    It skips leading whitespace and returns `false` if the substring is empty or starts with `#`.
-    Otherwise, it returns `true`, indicating that the line contains meaningful content.
+    It skips leading whitespace and returns `true` if the substring is empty or starts with `#`.
+    Otherwise, it returns `false`, indicating that the line contains meaningful content.
      */
-    if (b >= e) return false;
+    if (b >= e) return true;
     size_t i = b;
     while (i < e && isspace((int)s[i])) ++i;
-    if (i >= e) return false;
-    if (s[i] == '#') return false;
-    return true;
+    if (i >= e) return true;
+    if (s[i] == '#') return true;
+    return false;
 }
 
 
@@ -653,13 +483,24 @@ static char *memdup_str(const unsigned char *data, const size_t b, const size_t 
     return p;
 }
 
+static size_t findFirstCharInScalarAfterDash(const unsigned char *s, const size_t b, const size_t e) {
+    size_t firstNonWhitespacechar = b;
+    while (firstNonWhitespacechar < e) {
+        if (!isspace((int)s[firstNonWhitespacechar])) {
+            return firstNonWhitespacechar;
+        }
+        firstNonWhitespacechar++;
+    }
+    return firstNonWhitespacechar;
+}
 
 
 static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_t *out_size) {
-    if (!mappedFile || fileSize == 0 || !out_size) {
-        out_size = 0;
+    if (!mappedFile || fileSize == 0 || out_size == NULL) {
         return NULL;
     }
+
+
 
     const unsigned char *data = mappedFile;
     BlobBuilder bb;
@@ -679,22 +520,24 @@ static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_
 
         // trim
         size_t b, e;
-        trim_span(data, line_end - line_start, &b, &e);
-        b += line_start; e += line_start; // adjust to absolute offsets
+        // Data is a pointer to an array of characters, so if we add the beginning of a line to it,
+        // then only the line is passed to the function, not the entire contents of the file.
+        trim_span(data + line_start, line_end - line_start, &b, &e);
+        b += line_start;
+        e += line_start; // adjust to absolute offsets
 
-        if (is_comment_or_empty(data, b, e)) {
-            // check for sequence item "- item"
-            // find first non-space char
-            size_t i = b;
-            while (i < e && isspace((int)data[i])) ++i;
-            if (i < e && data[i] == '-') {
-                // sequence item
-                // content after '-'
-                size_t item_b = i + 1;
-                while (item_b < e && isspace((int)data[item_b])) ++item_b;
-                size_t item_e = e;
+        if (!is_comment_or_empty(data, b, e)) {
+            // This notation works because b is the first non-whitespace character,
+            // so if b is less than e -1, it means that string has at least 2 characters and if the first non-whitespace character is '-' and the next is a space,
+            // and we know that after the next character there is another character (because if abs(b-e)>2 && last char is not white-space), it's mean it must be a scalar.
+            if (b < e -1 && data[b] == '-' && isspace(data[b + 1])) {
+                //SCALAR CASE
+
+                // If b < e -1 --> abs(b-e) > 2 --> data[b+2] != nullptr
+                size_t item_b = findFirstCharInScalarAfterDash(data, b + 2, e);
+
                 size_t tb, te;
-                trim_span(data, item_e - item_b, &tb, &te);
+                trim_span(data + item_b, e - item_b, &tb, &te);
                 tb += item_b;
                 te += item_b;
 
@@ -827,7 +670,7 @@ static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_
     unsigned char *blob_buf = builder_build_to_memory(&bb, &blob_size, CJYAML_MAGIC, 1, 0, 1);
     if (!blob_buf) {
         builder_free(&bb);
-        if (out_size) *out_size = 0;
+        *out_size = 0;
         return NULL;
     }
     builder_free(&bb);
@@ -956,7 +799,7 @@ MYLIB_API void *mapFile(const char *path, size_t *out_size) {
 #endif
 }
 
-MYLIB_API int unmapFile(void *addr, size_t size) {
+MYLIB_API int unmapFile(void *addr, const size_t size) {
     if (addr == NULL) return -1;
 #if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
     if (size == 0) return -1;
@@ -969,14 +812,7 @@ MYLIB_API int unmapFile(void *addr, size_t size) {
 #endif
 }
 
-/* -------------------------
-   Native memory helpers
-   ------------------------- */
 
-MYLIB_API void freeBlob(void *ptr) {
-    if (!ptr) return;
-    free(ptr);
-}
 
 /* -------------------------
    JNI helpers
@@ -987,6 +823,7 @@ static jobject create_direct_bytebuffer_or_free(JNIEnv *env, void *buf, const jl
     const jobject bb = (*env)->NewDirectByteBuffer(env, buf, len);
     if (bb == NULL) {
         free(buf);
+        buf = NULL;
         return NULL;
     }
     return bb;
@@ -1007,24 +844,27 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToDirect
 
     size_t mapped_size = 0;
     void *mapped = mapFile(cpath, &mapped_size);
+
+    (*env)->ReleaseStringUTFChars(env, path, cpath);
+    cpath = NULL;
+
     if (mapped == NULL) {
-        (*env)->ReleaseStringUTFChars(env, path, cpath);
         return NULL;
     }
 
     /* Parse file contents into a new buffer */
     size_t parsed_size = 0;
     void *buf = parse(mapped, mapped_size, &parsed_size);
-
-    /* If parse() allocates a new buffer, we can unmap the original file now */
-    if (unmapFile(mapped, mapped_size) != 0) {
-        if (buf) free(buf);
-        (*env)->ReleaseStringUTFChars(env, path, cpath);
+    if (!buf) {
+        free(mapped);
+        mapped = NULL;
         return NULL;
     }
 
-    if (buf == NULL) {
-        (*env)->ReleaseStringUTFChars(env, path, cpath);
+    /* If parse() allocates a new buffer, we can unmap the original file now */
+    if (unmapFile(mapped, mapped_size) != 0) {
+        free(buf);
+        buf = NULL;
         return NULL;
     }
 
@@ -1034,12 +874,10 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToDirect
         jlen = (jlong)parsed_size;
     } else {
         free(buf);
-        (*env)->ReleaseStringUTFChars(env, path, cpath);
         return NULL;
     }
 
-    /* Always release the UTF string after use */
-    (*env)->ReleaseStringUTFChars(env, path, cpath);
+
 
     /* Wrap the native buffer as a DirectByteBuffer.
        The helper should free buf on error automatically. */
@@ -1059,21 +897,22 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     void *mapped = mapFile(cpath, &mapped_size);
     if (mapped == NULL) {
         (*env)->ReleaseStringUTFChars(env, path, cpath);
+        cpath = NULL;
         return NULL;
     }
 
     /* Parse the file */
     size_t parsed_size = 0;
     void *buf = parse(mapped, mapped_size, &parsed_size);
-
-    /* Unmap the original file after parsing */
-    if (unmapFile(mapped, mapped_size) != 0) {
-        if (buf) free(buf);
+    if (!buf) {
         (*env)->ReleaseStringUTFChars(env, path, cpath);
+        cpath = NULL;
         return NULL;
     }
 
-    if (buf == NULL) {
+    /* Unmap the original file after parsing */
+    if (unmapFile(mapped, mapped_size) != 0) {
+        free(buf);
         (*env)->ReleaseStringUTFChars(env, path, cpath);
         return NULL;
     }
@@ -1082,6 +921,9 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     if (parsed_size > (size_t)INT_MAX) {
         free(buf);
         (*env)->ReleaseStringUTFChars(env, path, cpath);
+
+        buf = NULL;
+        cpath = NULL;
         return NULL;
     }
     const jsize len = (jsize)parsed_size;
@@ -1125,6 +967,8 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     const size_t fileSize = (*env)->GetStringUTFLength(env, fileContent);
     void *buf = parse(fileContent, fileSize, &parsed_size);
     (*env)->ReleaseStringUTFChars(env, fileContent, cpath);
+    cpath = NULL;
+
     if (buf == NULL) {
         return NULL;
     }
@@ -1132,6 +976,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     /* Ensure size fits in jsize */
     if (parsed_size > (size_t)INT_MAX) {
         free(buf);
+        buf = NULL;
         return NULL;
     }
     const jsize len = (jsize)parsed_size;
@@ -1140,7 +985,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     const jbyteArray out = (*env)->NewByteArray(env, len);
     if (out == NULL) {
         free(buf);
-
+        buf = NULL;
         return NULL;
     }
 
@@ -1149,6 +994,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         free(buf);
+        buf = NULL;
         (*env)->DeleteLocalRef(env, out);
         (*env)->ReleaseStringUTFChars(env, fileContent, cpath);
         return NULL;
@@ -1156,6 +1002,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
 
     /* Free native memory and release Java string */
     free(buf);
+    buf = NULL;
 
     return out;
 }
@@ -1215,7 +1062,7 @@ static uint32_t read_u32_le_from_bytes(const void *p) {
  *   - The function is no-op if buffer is NULL or if the native address is NULL.
  */
 JNIEXPORT void JNICALL
-Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1freeBlob(JNIEnv *env, const jclass cls, jobject buffer) {
+Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1freeBlob(JNIEnv *env, const jclass cls, const jobject buffer) {
     (void)cls;
 
     if (buffer == NULL) return;
@@ -1240,6 +1087,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1freeBlob(JNIE
 
     /* Magic number matches – safe to free the memory */
     free(addr);
+    addr = NULL;
 }
 
 
