@@ -1,68 +1,109 @@
-# CJYaml
+# ⚙️ CJYaml — Ultra-fast YAML Parser for C & Java
 
-This is a parser for files in the yaml (1.2.2) format. CJ stands for c and java. All logic and parsing are written in pure C for maximum performance. They are compiled into DLL and SO files and then loaded using a simple Java "bridge" that allows efficient work with YAML files.
-
-
-
-Jasne! Oto krótka wersja po angielsku do README:
+CJYaml is a **high-performance YAML 1.2.2 parser** written entirely in **C** for maximum speed and efficiency.  
+The native library is seamlessly integrated with **Java** through a lightweight JNI bridge, allowing developers to work with YAML files faster than ever before.
 
 ---
 
-## Building the Project
+## 🚀 Features
 
-### Linux (native)
+- 🔥 **Native speed** — all parsing logic implemented in C  
+- 🧩 **JNI integration** — easy to call from Java with zero overhead  
+- 🛠️ **Cross-platform** — builds cleanly on Linux, Windows, and macOS  
+- 📦 **Simple build system** — powered by CMake + Maven  
+- 🧼 **Self-contained** — no external runtime dependencies  
+
+---
+
+## 🧰 Building the Project
+
+### 🐧 Linux / macOS
 
 ```bash
-BUILD_DIR="build"
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
+./build.sh
+````
 
-cmake -DENABLE_JNI=ON ..
+**Output:**
 
-cmake --build . --config Release
+* CMake build directory → `build/`
+* Compiled library → `out/linux/libcjyaml.so`
+* Copied to → `src/main/resources/`
+* Final JAR → `target/*.jar`
+
+#### Options
+
+```bash
+./build.sh --clean       # Remove build/ and out/ before building
+./build.sh --jobs 8      # Use 8 parallel jobs for compilation
 ```
 
-Output: `out/linux/`
+---
 
-* Shared library (if enabled): `libcjyaml.so`
-
-Copy the library to src/main/java/resources
-
-### Windows (native)
+### 🪟 Windows (CMD or PowerShell)
 
 ```cmd
-BUILD_DIR="build"
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-
-cmake -DENABLE_JNI=ON ..
-
-cmake --build . --config Release
+build.ps1
 ```
 
-Output: `out/windows/`
+**Output:**
 
-* Shared library: `cjyaml.dll`
+* CMake build directory → `build\`
+* Compiled library → `out\windows\cjyaml.dll`
+* Copied to → `src\main\resources\`
+* Final JAR → `target\*.jar`
 
-> Optional: Set `JAVA_WINDOWS_HOME` for JNI support on Windows.
+> 💡 You can set `JAVA_WINDOWS_HOME` if JNI headers are not automatically detected.
 
-Copy the library to src/main/java/resources
-### Clean
+---
+
+## 🧹 Cleaning Up
 
 ```bash
-cmake --build . --target clean-all
+./build.sh --clean
 ```
 
-Removes the `out/` directory and build artifacts.
+Removes all build directories and artifacts.
 
 
+---
 
-### Third-party components
+## 🧩 Architecture Overview
 
-This project includes the xxHash library:
+```
+┌────────────────────┐
+│      Java API      │
+│  (CJYaml Wrapper)  │
+└─────────┬──────────┘
+          │ JNI Bridge
+┌─────────▼──────────┐
+│       libcjyaml    │
+│    (C YAML Core)   │
+└────────────────────┘
+```
 
-- Name: xxHash
-- Author: Yann Collet
-- License: BSD 2-Clause
-- URL: https://github.com/Cyan4973/xxHash
-- Copyright © 2012-2021 Yann Collet
+* The **C layer** handles parsing, validation, and structure management.
+* The **Java layer** provides an intuitive object-oriented API.
+* Communication between them is done through **JNI**, without serialization overhead.
+
+---
+
+## ⚖️ License & Credits
+
+**License:** Apache 2.0
+Copyright © 2025
+Developed by [ScaleRock](https://github.com/ScaleRock)
+
+### Third-party Components
+
+This project includes the [xxHash](https://github.com/Cyan4973/xxHash) library:
+
+* **Author:** Yann Collet
+* **License:** BSD 2-Clause
+* **Copyright:** © 2012–2021 Yann Collet
+
+---
+
+> 🧩 *CJYaml — bridging the power of C with the simplicity of Java.*
+
+```
+
