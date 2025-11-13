@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 
 #if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
@@ -49,24 +50,6 @@ static uint64_t fnv1a64(const void *data, const uint64_t len) {
     return h;
 }
 
-static void *safe_malloc(const size_t n) {
-    void *p = malloc(n);
-    if (!p) {
-        fprintf(stderr, "FATAL: malloc(%zu) failed\n", n);
-        fflush(stderr);
-        exit(EXIT_FAILURE);
-    }
-    return p;
-}
-static void *safe_realloc(void *ptr, const size_t n) {
-    void *p = realloc(ptr, n);
-    if (!p) {
-        fprintf(stderr, "FATAL: realloc(%zu) failed\n", n);
-        fflush(stderr);
-        exit(EXIT_FAILURE);
-    }
-    return p;
-}
 
 /* Poprawione wektory z sprawdzaniem alokacji */
 static void nodes_init(NodeVec *v) {
@@ -80,7 +63,7 @@ static void nodes_init(NodeVec *v) {
 // - count: current number of elements
 // - cap_ptr: pointer to the current capacity
 // - elem_size: size of one element in bytes
-static void grow_array_if_needed(void **data_ptr, const size_t count, size_t *cap_ptr, const size_t elem_size) {
+static void grow_array_if_needed(void **data_ptr, const size_t count, size_t *cap_ptr) {
     if (count == *cap_ptr) {
         size_t new_capacity;
         if (*cap_ptr < 1024) {
@@ -90,25 +73,28 @@ static void grow_array_if_needed(void **data_ptr, const size_t count, size_t *ca
         } else {
             new_capacity = *cap_ptr + (*cap_ptr / 5);       // ~1.2x growth
         }
-
-        *data_ptr = safe_realloc(*data_ptr, new_capacity * elem_size);
+        void *data_tmp = realloc(*data_ptr, new_capacity * sizeof(void*));
+        if (!data_tmp) {
+            exit(EXIT_FAILURE);
+        }
+        *data_ptr = data_tmp;
         *cap_ptr = new_capacity;
     }
 }
 
 
 static void nodes_push(NodeVec *vec, const NodeEntry node) {
-    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(NodeEntry));
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap);
     vec->data[vec->count++] = node;
 }
 
-static void pairs_push(PairVec *vec, PairEntry pair) {
-    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(PairEntry));
+static void pairs_push(PairVec *vec, const PairEntry pair) {
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap);
     vec->data[vec->count++] = pair;
 }
 
-static void index_push(IndexVec *vec, uint32_t value) {
-    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(uint32_t));
+static void index_push(IndexVec *vec, const uint32_t value) {
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap);
     vec->data[vec->count++] = value;
 }
 
@@ -155,12 +141,24 @@ static void strings_push(StringVec *vec, const char *str, const size_t len) {
             new_capacity = vec->cap + vec->cap / 5;           // ~1.2x growth using integer math
         }
 
-        vec->data = safe_realloc(vec->data, new_capacity * sizeof(char*));
-        vec->lens = safe_realloc(vec->lens, new_capacity * sizeof(size_t));
+        char ** data_tmp = realloc(vec->data, new_capacity * sizeof(char *));
+        if (!data_tmp) {
+            exit(EXIT_FAILURE);
+        }
+        vec->data = data_tmp;
+
+        size_t * lens_tmp = realloc(vec->lens, new_capacity * sizeof(size_t));
+        if (!lens_tmp) {
+            exit(EXIT_FAILURE);
+        }
+
+        vec->lens = lens_tmp;
         vec->cap = new_capacity;
     }
-
-    char *copy = safe_malloc(len ? len + 1 : 1);
+    char *copy = malloc(sizeof(len ? len +1 : 1));
+    if (!copy) {
+        exit(EXIT_FAILURE);
+    }
     if (len) memcpy(copy, str, len);
     copy[len] = '\0';
 
@@ -172,11 +170,19 @@ static void strings_push(StringVec *vec, const char *str, const size_t len) {
 
 
 
-static void hash_init(HashVec *v) { v->data = NULL; v->count = 0; v->cap = 0; }
-static void hash_push(HashVec *v, HashEntry h) {
+static void hash_init(HashVec *v) {
+    v->data = NULL;
+    v->count = 0;
+    v->cap = 0;
+}
+static void hash_push(HashVec *v, const HashEntry h) {
     if (v->count == v->cap) {
         const size_t nc = v->cap ? v->cap * 2 : 16;
-        v->data = (HashEntry*) safe_realloc(v->data, nc * sizeof(HashEntry));
+        HashEntry* data_tmp = realloc(v->data, nc * sizeof(HashEntry));
+        if (!data_tmp) {
+            exit(EXIT_FAILURE);
+        }
+        v->data = data_tmp;
         v->cap = nc;
     }
     v->data[v->count++] = h;
@@ -820,7 +826,7 @@ MYLIB_API int unmapFile(void *addr, const size_t size) {
 
 /* Helper: create direct ByteBuffer or free pointer if creation fails */
 static jobject create_direct_bytebuffer_or_free(JNIEnv *env, void *buf, const jlong len) {
-    const jobject bb = (*env)->NewDirectByteBuffer(env, buf, len);
+    jobject bb = (*env)->NewDirectByteBuffer(env, buf, len);
     if (bb == NULL) {
         free(buf);
         buf = NULL;
@@ -914,6 +920,9 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     if (unmapFile(mapped, mapped_size) != 0) {
         free(buf);
         (*env)->ReleaseStringUTFChars(env, path, cpath);
+
+        cpath = NULL;
+        buf = NULL;
         return NULL;
     }
 
@@ -932,6 +941,7 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     const jbyteArray out = (*env)->NewByteArray(env, len);
     if (out == NULL) {
         free(buf);
+        buf = NULL;
         (*env)->ReleaseStringUTFChars(env, path, cpath);
         return NULL;
     }
@@ -939,8 +949,9 @@ Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToByteAr
     /* Copy from native buffer to Java byte[] */
     (*env)->SetByteArrayRegion(env, out, 0, len, (const jbyte *)buf);
     if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
         free(buf);
+        buf = NULL;
+        (*env)->ExceptionClear(env);
         (*env)->DeleteLocalRef(env, out);
         (*env)->ReleaseStringUTFChars(env, path, cpath);
         return NULL;
@@ -1062,7 +1073,7 @@ static uint32_t read_u32_le_from_bytes(const void *p) {
  *   - The function is no-op if buffer is NULL or if the native address is NULL.
  */
 JNIEXPORT void JNICALL
-Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1freeBlob(JNIEnv *env, const jclass cls, const jobject buffer) {
+Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1freeBlob(JNIEnv *env, const jclass cls, jobject buffer) {
     (void)cls;
 
     if (buffer == NULL) return;
