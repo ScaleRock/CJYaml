@@ -844,7 +844,7 @@ JNIEXPORT jobject JNICALL
 Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToDirectByteBuffer(JNIEnv *env, const jclass cls, const jstring path) {
     (void)cls;
     if (path == NULL) return NULL;
-
+    
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
     if (cpath == NULL) return NULL; // Out of memory
 
