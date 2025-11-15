@@ -92,6 +92,14 @@ _Static_assert(sizeof(HeaderBlob) == 90, "HeaderBlob must be 90 bytes");
 #define ALIAS 3
 #define DOCUMENT 4
 
+
+// SCALAR subtype (bits 0-1)
+#define SCALAR_STRING 0x0
+#define SCALAR_INT    0x1
+#define SCALAR_FLOAT  0x2
+#define SCALAR_BOOL   0x3
+
+
 #pragma pack(push,1)
 typedef struct {
     uint8_t node_type;

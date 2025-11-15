@@ -75,7 +75,6 @@ static void grow_array_if_needed(void **data_ptr, const size_t count, size_t *ca
         }
         void *data_tmp = realloc(*data_ptr, new_capacity * elem_size);
         if (!data_tmp) {
-            perror("realloc");
             exit(EXIT_FAILURE);
         }
         *data_ptr = data_tmp;
@@ -137,14 +136,12 @@ static void strings_push(StringVec *vec, const char *str, const size_t len) {
            If one fails, free the other and abort (fail fast). */
         char **data_tmp = realloc(vec->data, new_capacity * sizeof(char *));
         if (!data_tmp) {
-            perror("realloc(strings.data)");
             exit(EXIT_FAILURE);
         }
         vec->data = data_tmp;
 
         size_t *lens_tmp = realloc(vec->lens, new_capacity * sizeof(size_t));
         if (!lens_tmp) {
-            perror("realloc(strings.lens)");
             /* try to revert data allocation to keep consistent state (best-effort) */
             /* (we already replaced vec->data; to be safe exit) */
             exit(EXIT_FAILURE);
@@ -157,7 +154,6 @@ static void strings_push(StringVec *vec, const char *str, const size_t len) {
     /* Allocate and store string copy */
     char *copy = malloc(len ? len + 1 : 1);
     if (!copy) {
-        perror("malloc");
         exit(EXIT_FAILURE);
     }
     if (len) memcpy(copy, str, len);
@@ -197,7 +193,7 @@ static ssize_t strings_find(const StringVec *v, const char *s, const size_t len)
     for (size_t i=0;i<v->count;i++){
         if (v->lens[i] == len && memcmp(v->data[i], s, len)==0) return (ssize_t)i;
     }
-    return -1;
+    return SIZE_MAX;
 }
 
 static void builder_init(BlobBuilder *bb) {
@@ -501,7 +497,36 @@ static size_t findFirstCharInScalarAfterDash(const unsigned char *s, const size_
     }
     return firstNonWhitespacechar;
 }
+static uint16_t getStyleFlagFromStr(const char *str, const size_t len) {
+    bool hasDigit = false;
+    bool hasDot = false;
 
+    if (len == 0) return SCALAR_STRING;
+
+    for (size_t i = 0; i < len; i++) {
+        const char c = str[i];
+
+        if (isdigit((unsigned char)c)) {
+            hasDigit = true;
+        } else if (c == '.') {
+            if (hasDot) return UINT16_MAX;
+            if (!hasDigit) return UINT16_MAX;
+            if (i == len - 1) return UINT16_MAX;
+            hasDot = true;
+        } else {
+            if ((len == 4 && strncmp(str, "true", 4) == 0) ||
+                (len == 5 && strncmp(str, "false", 5) == 0)) {
+                return SCALAR_BOOL;
+                }
+            return SCALAR_STRING;
+        }
+    }
+
+    if (hasDot) return SCALAR_FLOAT;
+    if (hasDigit) return SCALAR_INT;
+
+    return SCALAR_STRING;
+}
 
 static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_t *out_size) {
     if (!mappedFile || fileSize == 0 || out_size == NULL) {
@@ -551,52 +576,57 @@ static unsigned char *parse(const void *mappedFile, const size_t fileSize, size_
 
                 char *item_str = memdup_str(data, tb, te);
                 if (!item_str) goto err;
+                const size_t lenItem = strlen(item_str);
+                const uint16_t styleFlagScalar = getStyleFlagFromStr(item_str, lenItem);
 
-                uint32_t item_node = builder_add_scalar(&bb, item_str, strlen(item_str), 0, 0);
-                free(item_str);
+                if (styleFlagScalar != UINT16_MAX) {
+                    uint32_t item_node = builder_add_scalar(&bb, item_str, lenItem, styleFlagScalar, 0);
 
-                if (!expecting_sequence_for_last_key) {
-                    // start a new anonymous sequence (no key) - create seq node that contains this single element for now
-                    uint32_t elems[1] = { item_node };
-                    uint32_t seq_idx = builder_add_sequence(&bb, elems, 1);
-                    // append a pair with empty key? For simplicity we map special key "" to the sequence
-                    uint32_t empty_k = builder_add_scalar(&bb, "", 0, 0, 0);
-                    builder_append_pair(&bb, empty_k, seq_idx);
-                    last_key_node = empty_k;
-                    expecting_sequence_for_last_key = 1; // sequence started
-                } else {
-                    // append item to last sequence: we must find sequence node index stored as value in last pair
-                    // last_key_node is index of key; find corresponding pair index by scanning pairs (inefficient but fine for demo)
-                    uint32_t seq_pair_index = (uint32_t)-1;
-                    for (size_t pi = 0; pi < bb.pairs.count; ++pi) {
-                        if (bb.pairs.data[pi].key_node_index == last_key_node) {
-                            seq_pair_index = (uint32_t)pi;
-                            break;
-                        }
-                    }
-                    if (seq_pair_index == (uint32_t)-1) {
-                        // fallback: create new sequence and pair
+                    if (!expecting_sequence_for_last_key) {
+                        // start a new anonymous sequence (no key) - create seq node that contains this single element for now
                         uint32_t elems[1] = { item_node };
                         uint32_t seq_idx = builder_add_sequence(&bb, elems, 1);
-                        builder_append_pair(&bb, last_key_node, seq_idx);
+                        // append a pair with empty key? For simplicity we map special key "" to the sequence
+                        uint32_t empty_k = builder_add_scalar(&bb, "", 0, 0, 0);
+                        builder_append_pair(&bb, empty_k, seq_idx);
+                        last_key_node = empty_k;
+                        expecting_sequence_for_last_key = 1; // sequence started
                     } else {
-                        // get current value node index (should be sequence node index)
-                        uint32_t value_node_idx = bb.pairs.data[seq_pair_index].value_node_index;
-                        // value_node_idx references a NodeEntry of type SEQUENCE; we need to append item to index_table and increase element_count
-                        if (value_node_idx < bb.nodes.count && bb.nodes.data[value_node_idx].node_type == 1) {
-                            // append to index table
-                            index_push(&bb.indices, item_node);
-                            // update node.b (element_count)
-                            bb.nodes.data[value_node_idx].b += 1;
-                            // note: node.a (first_index) remains valid since index table is flat and we appended at end
-                        } else {
-                            // not a sequence (or not exist), create new sequence and replace pair value
+                        // append item to last sequence: we must find sequence node index stored as value in last pair
+                        // last_key_node is index of key; find corresponding pair index by scanning pairs (inefficient but fine for demo)
+                        uint32_t seq_pair_index = (uint32_t)-1;
+                        for (size_t pi = 0; pi < bb.pairs.count; ++pi) {
+                            if (bb.pairs.data[pi].key_node_index == last_key_node) {
+                                seq_pair_index = (uint32_t)pi;
+                                break;
+                            }
+                        }
+                        if (seq_pair_index == (uint32_t)-1) {
+                            // fallback: create new sequence and pair
                             uint32_t elems[1] = { item_node };
                             uint32_t seq_idx = builder_add_sequence(&bb, elems, 1);
-                            bb.pairs.data[seq_pair_index].value_node_index = seq_idx;
+                            builder_append_pair(&bb, last_key_node, seq_idx);
+                        } else {
+                            // get current value node index (should be sequence node index)
+                            uint32_t value_node_idx = bb.pairs.data[seq_pair_index].value_node_index;
+                            // value_node_idx references a NodeEntry of type SEQUENCE; we need to append item to index_table and increase element_count
+                            if (value_node_idx < bb.nodes.count && bb.nodes.data[value_node_idx].node_type == 1) {
+                                // append to index table
+                                index_push(&bb.indices, item_node);
+                                // update node.b (element_count)
+                                bb.nodes.data[value_node_idx].b += 1;
+                                // note: node.a (first_index) remains valid since index table is flat and we appended at end
+                            } else {
+                                // not a sequence (or not exist), create new sequence and replace pair value
+                                uint32_t elems[1] = { item_node };
+                                uint32_t seq_idx = builder_add_sequence(&bb, elems, 1);
+                                bb.pairs.data[seq_pair_index].value_node_index = seq_idx;
+                            }
                         }
                     }
                 }
+                free(item_str);
+                item_str = NULL;
             } else {
                 // mapping "key: value" (split at first ':')
                 size_t colon = b;
