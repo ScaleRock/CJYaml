@@ -98,11 +98,17 @@ Developed by [ScaleRock](https://github.com/ScaleRock)
 
 ### Third-party Components
 
-This project includes the [xxHash](https://github.com/Cyan4973/xxHash) library:
+This project includes the [xxHash](https://github.com/Cyan4973/xxHash) library and the [JetBrains Annotations library](https://github.com/JetBrains/java-annotations):
 
-* **Author:** Yann Collet
-* **License:** BSD 2-Clause
-* **Copyright:** © 2012–2021 Yann Collet
+* xxHash:
+  * **Author:** Yann Collet
+  * **License:** BSD 2-Clause
+  * **Copyright:** © 2012–2021 Yann Collet
+
+* JetBrains Annotations:
+    * **Author:** JetBrains s.r.o.
+    * **License:** Apache License 2.0
+    * **Copyright:** © JetBrains s.r.o.
 
 ---
 

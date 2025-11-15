@@ -1,7 +1,9 @@
 package com.github.scalerock.cjyaml;
 
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -14,7 +16,6 @@ import java.util.Objects;
 
 /**
  * High-level wrapper for CJYaml native blob handling.
- *
  * Usage:
  * try (CJYaml parser = new CJYaml()) {
  *     parser.parseFile(path); // default uses DirectByteBuffer
@@ -215,10 +216,10 @@ public class CJYaml implements AutoCloseable {
         public long string_table_offset;
         public long string_table_size;
 
-        public Map<String, Long> toMap() {
+        public @NotNull Map<String, Long> toMap() {
             Map<String, Long> m = new HashMap<>();
             m.put("magic", magic);
-            m.put("version", (long)version);
+            m.put("version", (long) version);
             m.put("flags", flags);
 
             m.put("node_table_offset", node_table_offset);
@@ -262,7 +263,7 @@ public class CJYaml implements AutoCloseable {
     }
 
     // get a duplicated LE-ordered buffer for absolute reads
-    private ByteBuffer blobBuf() {
+    private @NotNull ByteBuffer blobBuf() {
         if (blobByteBuffer != null) {
             return blobByteBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         } else if (blobBytes != null) {
@@ -273,6 +274,7 @@ public class CJYaml implements AutoCloseable {
     }
 
     // read a NodeEntry by index
+    @org.jetbrains.annotations.Nullable
     private NodeEntry readNode(int nodeIndex) {
         Header h = getHeader();
         if (h == null) return null;
@@ -298,7 +300,7 @@ public class CJYaml implements AutoCloseable {
     }
 
     // read PairEntry by index
-    private PairEntry readPair(int pairIndex) {
+    private @Nullable PairEntry readPair(int pairIndex) {
         Header h = getHeader();
         if (h == null) return null;
         long pairTableOffset = h.pair_table_offset;
@@ -327,7 +329,7 @@ public class CJYaml implements AutoCloseable {
 
 
     // read UTF-8 string from string_table: offset = offset into string table, len = length in bytes
-    private String readString(long strOffset, long len) {
+    private @Nullable String readString(long strOffset, long len) {
         Header h = getHeader();
         if (h == null) return null;
         long base = h.string_table_offset;
@@ -369,7 +371,7 @@ public class CJYaml implements AutoCloseable {
     }
 
     // recursive parse node -> Object
-    private Object parseNode(int nodeIndex, int depth) {
+    private @Nullable Object parseNode(int nodeIndex, int depth) {
         // avoid infinite recursion
         if (depth > 1024) throw new IllegalStateException("max depth exceeded");
 

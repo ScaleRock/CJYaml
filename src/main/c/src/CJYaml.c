@@ -63,18 +63,19 @@ static void nodes_init(NodeVec *v) {
 // - count: current number of elements
 // - cap_ptr: pointer to the current capacity
 // - elem_size: size of one element in bytes
-static void grow_array_if_needed(void **data_ptr, const size_t count, size_t *cap_ptr) {
+static void grow_array_if_needed(void **data_ptr, const size_t count, size_t *cap_ptr, const size_t elem_size) {
     if (count == *cap_ptr) {
         size_t new_capacity;
         if (*cap_ptr < 1024) {
-            new_capacity = *cap_ptr ? (*cap_ptr * 2) : 16;  // double for small arrays
+            new_capacity = *cap_ptr ? (*cap_ptr * 2) : 16;
         } else if (*cap_ptr < 10000) {
-            new_capacity = *cap_ptr + (*cap_ptr / 2);       // ~1.5x growth
+            new_capacity = *cap_ptr + (*cap_ptr / 2);
         } else {
-            new_capacity = *cap_ptr + (*cap_ptr / 5);       // ~1.2x growth
+            new_capacity = *cap_ptr + (*cap_ptr / 5);
         }
-        void *data_tmp = realloc(*data_ptr, new_capacity * sizeof(void*));
+        void *data_tmp = realloc(*data_ptr, new_capacity * elem_size);
         if (!data_tmp) {
+            perror("realloc");
             exit(EXIT_FAILURE);
         }
         *data_ptr = data_tmp;
@@ -84,17 +85,17 @@ static void grow_array_if_needed(void **data_ptr, const size_t count, size_t *ca
 
 
 static void nodes_push(NodeVec *vec, const NodeEntry node) {
-    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap);
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(NodeEntry));
     vec->data[vec->count++] = node;
 }
 
 static void pairs_push(PairVec *vec, const PairEntry pair) {
-    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap);
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(PairEntry));
     vec->data[vec->count++] = pair;
 }
 
 static void index_push(IndexVec *vec, const uint32_t value) {
-    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap);
+    grow_array_if_needed((void**)&vec->data, vec->count, &vec->cap, sizeof(uint32_t));
     vec->data[vec->count++] = value;
 }
 
