@@ -122,42 +122,42 @@ static void strings_init(StringVec *v) { v->data = NULL; v->lens = NULL; v->coun
 
 
 static void strings_push(StringVec *vec, const char *str, const size_t len) {
-    // Appends a new string to a StringVec, expanding the capacity if needed.
-    // The capacity grows differently depending on the current size:
-    //   - double (x2) until 1024 elements
-    //   - 1.5x (approximate using integer math) until 10,000 elements
-    //   - 1.2x (approximate using integer math) for larger sizes
-    // - vec: pointer to the StringVec to append to
-    // - str: pointer to the string to add
-    // - len: length of the string
-
+    /* Ensure capacity for both arrays at once */
     if (vec->count == vec->cap) {
         size_t new_capacity;
-
         if (vec->cap < 1024) {
-            new_capacity = vec->cap ? vec->cap * 2 : 16;       // fast growth for small vectors
+            new_capacity = vec->cap ? (vec->cap * 2) : 16;
         } else if (vec->cap < 10000) {
-            new_capacity = vec->cap + vec->cap / 2;           // ~1.5x growth using integer math
+            new_capacity = vec->cap + (vec->cap / 2);
         } else {
-            new_capacity = vec->cap + vec->cap / 5;           // ~1.2x growth using integer math
+            new_capacity = vec->cap + (vec->cap / 5);
         }
 
-        char ** data_tmp = realloc(vec->data, new_capacity * sizeof(char *));
+        /* Realloc both arrays; do them separately but based on same new_capacity.
+           If one fails, free the other and abort (fail fast). */
+        char **data_tmp = realloc(vec->data, new_capacity * sizeof(char *));
         if (!data_tmp) {
+            perror("realloc(strings.data)");
             exit(EXIT_FAILURE);
         }
         vec->data = data_tmp;
 
-        size_t * lens_tmp = realloc(vec->lens, new_capacity * sizeof(size_t));
+        size_t *lens_tmp = realloc(vec->lens, new_capacity * sizeof(size_t));
         if (!lens_tmp) {
+            perror("realloc(strings.lens)");
+            /* try to revert data allocation to keep consistent state (best-effort) */
+            /* (we already replaced vec->data; to be safe exit) */
             exit(EXIT_FAILURE);
         }
-
         vec->lens = lens_tmp;
+
         vec->cap = new_capacity;
     }
-    char *copy = malloc(sizeof(len ? len +1 : 1));
+
+    /* Allocate and store string copy */
+    char *copy = malloc(len ? len + 1 : 1);
     if (!copy) {
+        perror("malloc");
         exit(EXIT_FAILURE);
     }
     if (len) memcpy(copy, str, len);
@@ -167,6 +167,7 @@ static void strings_push(StringVec *vec, const char *str, const size_t len) {
     vec->lens[vec->count] = len;
     vec->count++;
 }
+
 
 
 
@@ -845,7 +846,7 @@ JNIEXPORT jobject JNICALL
 Java_com_github_scalerock_cjyaml_CJYaml_00024NativeBlob_NativeLib_1parseToDirectByteBuffer(JNIEnv *env, const jclass cls, const jstring path) {
     (void)cls;
     if (path == NULL) return NULL;
-    
+
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
     if (cpath == NULL) return NULL; // Out of memory
 
